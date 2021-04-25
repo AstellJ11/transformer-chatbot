@@ -14,7 +14,7 @@ import tensorflow_text as text
 import tensorflow as tf
 from tensorflow_text.tools.wordpiece_vocab import bert_vocab_from_dataset as bert_vocab
 
-path_to_file = 'all_training_dialogue.csv'  # TEMP
+path_to_file = 'processed_data/train/all_training_dialogue.csv'
 
 train_examples = tf.data.experimental.CsvDataset(path_to_file, ["", ""])
 
