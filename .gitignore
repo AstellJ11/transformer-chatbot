@@ -133,12 +133,13 @@ __pycache__/
 # User defined files
 
 test.py
-test2.py
 
 raw_data/
 tokenizer_model/
+processed_data/
+checkpoints/
 
 en_vocab.txt
 pt_vocab.txt
-
 all_training_dialogue.csv
+status.txt
