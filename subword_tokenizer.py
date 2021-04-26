@@ -14,20 +14,23 @@ import tensorflow_text as text
 import tensorflow as tf
 from tensorflow_text.tools.wordpiece_vocab import bert_vocab_from_dataset as bert_vocab
 
-path_to_file = 'processed_data/train/all_training_dialogue.csv'
+path_to_file = 'processed_data/train/all_training_dialogue.csv'  # Input file
 
-train_examples = tf.data.experimental.CsvDataset(path_to_file, ["", ""])
+train_examples = tf.data.experimental.CsvDataset(path_to_file, ["", ""])  # Create CSV data.dataset
 
+# pt -> input, en -> response
+# Print dataset
 for pt, en in train_examples.take(3):
-    print("Portuguese: ", pt.numpy().decode('utf-8'))
-    print("English:   ", en.numpy().decode('utf-8'))
+    print("Input: ", pt.numpy().decode('utf-8'))
+    print("Response:   ", en.numpy().decode('utf-8'))
 
+# Split input + response data
 train_en = train_examples.map(lambda pt, en: en)
 train_pt = train_examples.map(lambda pt, en: pt)
 
+# Tokenizer parameters
 bert_tokenizer_params = dict(lower_case=True)
 reserved_tokens = ["[PAD]", "[UNK]", "[START]", "[END]"]
-
 bert_vocab_args = dict(
     # The target vocabulary size
     vocab_size=8000,
@@ -39,6 +42,7 @@ bert_vocab_args = dict(
     learn_params={},
 )
 
+# Input vocab
 pt_vocab = bert_vocab.bert_vocab_from_dataset(
     train_pt.batch(1000).prefetch(2),
     **bert_vocab_args
@@ -50,6 +54,7 @@ print(pt_vocab[1000:1010])
 print(pt_vocab[-10:])
 
 
+# Vocab to file
 def write_vocab_file(filepath, vocab):
     with open(filepath, 'w') as f:
         for token in vocab:
@@ -58,6 +63,7 @@ def write_vocab_file(filepath, vocab):
 
 write_vocab_file('pt_vocab.txt', pt_vocab)
 
+# Response vocab
 en_vocab = bert_vocab.bert_vocab_from_dataset(
     train_en.batch(1000).prefetch(2),
     **bert_vocab_args
@@ -70,9 +76,11 @@ print(en_vocab[-10:])
 
 write_vocab_file('en_vocab.txt', en_vocab)
 
+# Create tokenizer
 pt_tokenizer = text.BertTokenizer('pt_vocab.txt', **bert_tokenizer_params)
 en_tokenizer = text.BertTokenizer('en_vocab.txt', **bert_tokenizer_params)
 
+# Example data
 for pt_examples, en_examples in train_examples.batch(3).take(1):
     for ex in en_examples:
         print(ex.numpy())
@@ -85,14 +93,16 @@ token_batch = token_batch.merge_dims(-2, -1)
 for ex in token_batch.to_list():
     print(ex)
 
-# Lookup each token id in the vocabulary.
+# Lookup each token id in the vocabulary
 txt_tokens = tf.gather(en_vocab, token_batch)
-# Join with spaces.
+# Join with spaces
 tf.strings.reduce_join(txt_tokens, separator=' ', axis=-1)
 
+# Re-assemble words from token
 words = en_tokenizer.detokenize(token_batch)
 tf.strings.reduce_join(words, separator=' ', axis=-1)
 
+# Add START + END reserved tokens
 START = tf.argmax(tf.constant(reserved_tokens) == "[START]")
 END = tf.argmax(tf.constant(reserved_tokens) == "[END]")
 
@@ -108,6 +118,7 @@ words = en_tokenizer.detokenize(add_start_end(token_batch))
 tf.strings.reduce_join(words, separator=' ', axis=-1)
 
 
+# Prepare clean text for output (Remove reserved tokens + join strings)
 def cleanup_text(reserved_tokens, token_txt):
     # Drop the reserved tokens, except for "[UNK]".
     bad_tokens = [re.escape(tok) for tok in reserved_tokens if tok != "[UNK]"]
@@ -121,10 +132,14 @@ def cleanup_text(reserved_tokens, token_txt):
 
     return result
 
+# Checking output
+print(en_examples.numpy())
 
 token_batch = en_tokenizer.tokenize(en_examples).merge_dims(-2, -1)
 words = en_tokenizer.detokenize(token_batch)
 print(words)
+
+print(cleanup_text(reserved_tokens, words).numpy())
 
 
 class CustomTokenizer(tf.Module):
@@ -190,13 +205,16 @@ class CustomTokenizer(tf.Module):
         return tf.constant(self._reserved_tokens)
 
 
+# Build customTokenizer for both input/response
 tokenizers = tf.Module()
 tokenizers.pt = CustomTokenizer(reserved_tokens, 'pt_vocab.txt')
 tokenizers.en = CustomTokenizer(reserved_tokens, 'en_vocab.txt')
 
+# Export model as saved_model
 model_name = 'tokenizer_model'
 tf.saved_model.save(tokenizers, model_name)
 
+# Reload model to check
 reloaded_tokenizers = tf.saved_model.load(model_name)
 print(reloaded_tokenizers.en.get_vocab_size().numpy())
 

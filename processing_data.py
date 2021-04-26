@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import logging
+import re
 from downloading_data import init_logging, remove_file
 
 from pathlib import Path
@@ -9,6 +10,20 @@ import tqdm as tqdm
 from pick import pick
 import csv
 import pandas as pd
+
+
+def preprocess_sentence(w):
+    w = (w.lower().strip())
+
+    # Create a space between a word and the punctuation following it
+    w = re.sub(r"([?.!,¿])", r" \1 ", w)
+    w = re.sub(r'[" "]+', " ", w)
+
+    # Replace everything with space except (a-z, A-Z, ".", "?", "!", ",", all numbers, "-" and "$" for the slotted values)
+    w = re.sub(r"[^a-zA-Z?.!,¿$_0123456789-]+", " ", w)
+    w = w.strip()
+
+    return w
 
 
 # Allow the user to choose a domain
@@ -82,7 +97,10 @@ def extract_utterance(inp_dir, out_dir):
             if substring_in_domain == True:
                 for item in dialogue['turns']:
                     utterance = [item['utterance']]  # Extract the system and user speech
-                    temp_dialogs.extend(utterance)
+                    s_utterance = utterance[0]  # Single list element to string
+                    w = preprocess_sentence(s_utterance)  # String to function
+                    w_utterance = [w]  # Return value back to list
+                    temp_dialogs.extend(w_utterance)
         all_dialogs.extend(temp_dialogs)  # Add all elements of new dialogue to overall list
 
     # Process data into required format: I \t R \n I \t R...
@@ -153,7 +171,9 @@ def slotted_utterance(inp_dir, out_dir):
                             for i in canonical_value:
                                 utterance = utterance.replace(i, slot_value)
 
-                    temp_dialogs.append(utterance)
+                            w = preprocess_sentence(utterance)  # String to function
+
+                    temp_dialogs.append(w)
         all_dialogs.extend(temp_dialogs)
 
     # Process data into required format: I \t R \n I \t R...
