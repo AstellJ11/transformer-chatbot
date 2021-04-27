@@ -6,6 +6,9 @@ import re
 import string
 import sys
 import time
+from downloading_data import init_logging
+import tqdm as tqdm
+import timeit
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -13,6 +16,15 @@ import matplotlib.pyplot as plt
 import tensorflow_datasets as tfds
 import tensorflow_text as text
 import tensorflow as tf
+
+# Initialise logger
+init_logging()
+logger = logging.getLogger(__name__)
+
+# Access the parent directory
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+sys.path.insert(0, parent_dir)
 
 path_to_file = 'processed_data/train/all_training_dialogue.csv'
 
@@ -110,11 +122,12 @@ pos_encoding = tf.reshape(pos_encoding, (n, d // 2, 2))
 pos_encoding = tf.transpose(pos_encoding, (2, 1, 0))
 pos_encoding = tf.reshape(pos_encoding, (d, n))
 
-plt.pcolormesh(pos_encoding, cmap='RdBu')
-plt.ylabel('Depth')
-plt.xlabel('Position')
-plt.colorbar()
-plt.show()
+
+# plt.pcolormesh(pos_encoding, cmap='RdBu')
+# plt.ylabel('Depth')
+# plt.xlabel('Position')
+# plt.colorbar()
+# plt.show()
 
 
 def create_padding_mask(seq):
@@ -140,23 +153,6 @@ print(temp)
 
 
 def scaled_dot_product_attention(q, k, v, mask):
-    """Calculate the attention weights.
-    q, k, v must have matching leading dimensions.
-    k, v must have matching penultimate dimension, i.e.: seq_len_k = seq_len_v.
-    The mask has different shapes depending on its type(padding or look ahead)
-    but it must be broadcastable for addition.
-
-    Args:
-      q: query shape == (..., seq_len_q, depth)
-      k: key shape == (..., seq_len_k, depth)
-      v: value shape == (..., seq_len_v, depth_v)
-      mask: Float tensor with shape broadcastable
-            to (..., seq_len_q, seq_len_k). Defaults to None.
-
-    Returns:
-      output, attention_weights
-    """
-
     matmul_qk = tf.matmul(q, k, transpose_b=True)  # (..., seq_len_q, seq_len_k)
 
     # scale matmul_qk
@@ -235,9 +231,6 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         self.dense = tf.keras.layers.Dense(d_model)
 
     def split_heads(self, x, batch_size):
-        """Split the last dimension into (num_heads, depth).
-        Transpose the result such that the shape is (batch_size, num_heads, seq_len, depth)
-        """
         x = tf.reshape(x, (batch_size, -1, self.num_heads, self.depth))
         return tf.transpose(x, perm=[0, 2, 1, 3])
 
@@ -577,13 +570,8 @@ def create_masks(inp, tar):
     # Encoder padding mask
     enc_padding_mask = create_padding_mask(inp)
 
-    # Used in the 2nd attention block in the decoder.
-    # This padding mask is used to mask the encoder outputs.
     dec_padding_mask = create_padding_mask(inp)
 
-    # Used in the 1st attention block in the decoder.
-    # It is used to pad and mask future tokens in the input received by
-    # the decoder.
     look_ahead_mask = create_look_ahead_mask(tf.shape(tar)[1])
     dec_target_padding_mask = create_padding_mask(tar)
     combined_mask = tf.maximum(dec_target_padding_mask, look_ahead_mask)
@@ -598,23 +586,19 @@ ckpt = tf.train.Checkpoint(transformer=transformer,
 
 ckpt_manager = tf.train.CheckpointManager(ckpt, checkpoint_path, max_to_keep=5)
 
-# if a checkpoint exists, restore the latest checkpoint.
+# Restore the latest checkpoint.
 if ckpt_manager.latest_checkpoint:
     ckpt.restore(ckpt_manager.latest_checkpoint)
     print('Latest checkpoint restored!!')
 
-EPOCHS = 20
-
-# The @tf.function trace-compiles train_step into a TF graph for faster
-# execution. The function specializes to the precise shape of the argument
-# tensors. To avoid re-tracing due to the variable sequence lengths or variable
-# batch sizes (the last batch is smaller), use input_signature to specify
-# more generic shapes.
+EPOCHS = 5
 
 train_step_signature = [
     tf.TensorSpec(shape=(None, None), dtype=tf.int64),
     tf.TensorSpec(shape=(None, None), dtype=tf.int64),
 ]
+
+training_start_time = timeit.default_timer()  # Start training timer
 
 
 @tf.function(input_signature=train_step_signature)
@@ -645,7 +629,7 @@ for epoch in range(EPOCHS):
     train_loss.reset_states()
     train_accuracy.reset_states()
 
-    # inp -> portuguese, tar -> english
+    # inp -> input, tar -> response
     for (batch, (inp, tar)) in enumerate(train_batches):
         train_step(inp, tar)
 
@@ -661,16 +645,22 @@ for epoch in range(EPOCHS):
 
     print(f'Time taken for 1 epoch: {time.time() - start:.2f} secs\n')
 
+# Stop training timer
+training_elapsed = timeit.default_timer() - training_start_time
+print("Time taken training:", round(training_elapsed), "sec")
 
+
+# ******************************************* MODEL TESTING *******************************************
+
+# Main evaluate method
 def evaluate(sentence, max_length=40):
-    # inp sentence is portuguese, hence adding the start and end token
+    # Add start + end token
     sentence = tf.convert_to_tensor([sentence])
     sentence = tokenizers.pt.tokenize(sentence).to_tensor()
 
     encoder_input = sentence
 
-    # as the target is english, the first word to the transformer should be the
-    # english start token.
+    # The first word to the transformer should be the start token
     start, end = tokenizers.en.tokenize([''])[0]
     output = tf.convert_to_tensor([start])
     output = tf.expand_dims(output, 0)
@@ -687,20 +677,17 @@ def evaluate(sentence, max_length=40):
                                                      combined_mask,
                                                      dec_padding_mask)
 
-        # select the last word from the seq_len dimension
+        # Select the last word from the seq_len dimension
         predictions = predictions[:, -1:, :]  # (batch_size, 1, vocab_size)
 
         predicted_id = tf.argmax(predictions, axis=-1)
 
-        # concatentate the predicted_id to the output which is given to the decoder
-        # as its input.
         output = tf.concat([output, predicted_id], axis=-1)
 
-        # return the result if the predicted_id is equal to the end token
+        # Return the result if the predicted_id is equal to the end token
         if predicted_id == end:
             break
 
-    # output.shape (1, tokens)
     text = tokenizers.en.detokenize(output)[0]  # shape: ()
 
     tokens = tokenizers.en.lookup(output)[0]
@@ -708,14 +695,65 @@ def evaluate(sentence, max_length=40):
     return text, tokens, attention_weights
 
 
-def print_translation(sentence, tokens, ground_truth):
-    print(f'{"Input:":15s}: {sentence}')
-    print(f'{"Prediction":15s}: {tokens.numpy().decode("utf-8")}')
-    print(f'{"Ground truth":15s}: {ground_truth}')
+# def print_translation(sentence, tokens, ground_truth):
+#     print(f'{"Input:":15s}: {sentence}')
+#     print(f'{"Prediction":15s}: {tokens.numpy().decode("utf-8")}')
+#     print(f'{"Ground truth":15s}: {ground_truth}')
+
+# Generate response using evaluate function
+def response(sentence):
+    translated_text, translated_tokens, attention_weights = evaluate(sentence)
+
+    # print('Input: %s' % (sentence))
+    # print('Predicted response: {}'.format(translated_text))
+
+    return translated_text
+
 
 # Test sentence
-sentence = "I want to check the weather for $date."
-ground_truth = "What city are you checking the weather for?"
+# sentence = "I want to check the weather for $date."
+# ground_truth = "What city are you checking the weather for?"
 
-translated_text, translated_tokens, attention_weights = evaluate(sentence)
-print_translation(sentence, translated_text, ground_truth)
+# translated_text, translated_tokens, attention_weights = evaluate(sentence)
+# print_translation(sentence, translated_text, ground_truth)
+
+# Main evaluation function
+def evaluate_model(filename):
+    testing_start_time = timeit.default_timer()  # Start testing timer
+
+    # Open the testing dialogue and split at new line
+    with open(filename) as f:
+        content = f.readlines()
+    content = [x.strip() for x in content]  # Remove \n characters
+
+    # Pass each sentence to response function and add output to new empty list
+    empty_list = []
+    new_string = ''
+    for x in tqdm.tqdm(content, desc='Generating responses based on testing data:'):
+        result = response(x)
+        new_string = ('{}'.format(result))
+        new_string = new_string.replace('<end>', '')
+        empty_list.append(new_string)
+
+    # File Saving
+    file_path = "processed_data/BLEU/machine_translated_dialogue.txt"
+    logger.info(f"Saving predicted response data to {file_path}")
+
+    with open(file_path, mode='wt', encoding='utf-8') as myfile:
+        myfile.write('\n'.join(empty_list))
+
+    logger.info("Saving Complete!")
+
+    # gt_path = current_dir + "/processed_data/BLEU/human_translated_dialogue.txt"
+    # hypothesis_path = current_dir + "/processed_data/BLEU/machine_translated_dialogue.txt"
+
+    # Calculating the word error rate
+    # WER(gt_path, hypothesis_path)
+
+    # Stop testing timer
+    testing_elapsed = timeit.default_timer() - testing_start_time
+    print("Time taken testing:", round(testing_elapsed), "sec")
+
+
+path_to_data_test = "input_testing_dialogue.txt"
+evaluate_model(path_to_data_test)
