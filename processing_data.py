@@ -140,6 +140,79 @@ def extract_utterance(inp_dir, out_dir):
     logger.info("Processing Complete!")
 
 
+# Extract raw testing utterances for BLEU metric
+def testing_translated_utterance(inp_dir, out_dir):
+    all_dialogs = []  # List array for final extracted dialogs
+
+    for file_name in tqdm.tqdm(os.listdir(inp_dir),
+                               desc='Extracting testing utterances'):  # Display progress bar during loop
+
+        if 'schema.json' in file_name:
+            continue
+
+        file_path = os.path.join(inp_dir, file_name)
+
+        with open(file_path, "r") as f:
+            data = json.load(f)
+
+        temp_dialogs = []
+        for dialogue in data:
+            substring_in_domain = any(domain_option in string for string in dialogue['services'])
+            if substring_in_domain == True:
+                for item in dialogue['turns']:
+                    utterance = [item['utterance']]  # Extract the system and user speech
+                    temp_dialogs.extend(utterance)
+        all_dialogs.extend(temp_dialogs)  # Add all elements of new dialogue to overall list
+
+    all_dialogs.pop(0)  # Removes the first value to allow iteration to start at the second
+    test_inp = all_dialogs[::2]  # Extract individual testing sentences from pairs
+
+    # File Saving
+    file_path = Path(current_dir, out_dir)
+    logger.info(f"Saving Schema dialogue data to {file_path}")
+
+    with open(file_path, mode='wt', encoding='utf-8') as myfile:
+        myfile.write('\n'.join(test_inp))
+
+    logger.info("Processing Complete!")
+
+
+# Extract just input dialogue for testing purposes
+def testing_input_utterance(inp_dir, out_dir):
+    all_dialogs = []  # List array for final extracted dialogs
+
+    for file_name in tqdm.tqdm(os.listdir(inp_dir),
+                               desc='Extracting testing utterances'):  # Display progress bar during loop
+
+        if 'schema.json' in file_name:
+            continue
+
+        file_path = os.path.join(inp_dir, file_name)
+
+        with open(file_path, "r") as f:
+            data = json.load(f)
+
+        temp_dialogs = []
+        for dialogue in data:
+            substring_in_domain = any(domain_option in string for string in dialogue['services'])
+            if substring_in_domain == True:
+                for item in dialogue['turns']:
+                    utterance = [item['utterance']]  # Extract the system and user speech
+                    temp_dialogs.extend(utterance)
+        all_dialogs.extend(temp_dialogs)  # Add all elements of new dialogue to overall list
+
+    test_inp = all_dialogs[::2]  # Extract individual testing sentences from pairs
+
+    # File Saving
+    file_path = Path(current_dir, out_dir)
+    logger.info(f"Saving Schema dialogue data to {file_path}")
+
+    with open(file_path, mode='wt', encoding='utf-8') as myfile:
+        myfile.write('\n'.join(test_inp))
+
+    logger.info("Processing Complete!")
+
+
 # Extract all utterances with slotted values replaced
 def slotted_utterance(inp_dir, out_dir):
     all_dialogs = []  # List array for final extracted dialogs
@@ -213,6 +286,97 @@ def slotted_utterance(inp_dir, out_dir):
     logger.info("Processing Complete!")
 
 
+def slotted_testing_translated_utterance(inp_dir, out_dir):
+    all_dialogs = []  # List array for final extracted dialogs
+
+    for file_name in tqdm.tqdm(os.listdir(inp_dir),
+                               desc='Extracting testing utterances'):  # Display progress bar during loop
+
+        if 'schema.json' in file_name:
+            continue
+
+        file_path = os.path.join(inp_dir, file_name)
+
+        with open(file_path, "r") as f:
+            data = json.load(f)
+
+        temp_dialogs = []
+        for dialogue in data:
+            # Check selected domain substring against string values
+            substring_in_domain = any(domain_option in string for string in dialogue['services'])
+            if substring_in_domain == True:
+                for item in dialogue['turns']:
+                    utterance = item['utterance']  # Extract the system and user speech
+                    for item2 in item['frames']:
+                        for item3 in item2['actions']:
+                            canonical_value = item3['values']  # Extract canonical values
+                            slot_value = '$' + item3['slot']  # Extract replacement slot values
+
+                            # Replace each canonical value with its respected slot value
+                            for i in canonical_value:
+                                utterance = utterance.replace(i, slot_value)
+
+                    temp_dialogs.append(utterance)
+        all_dialogs.extend(temp_dialogs)
+
+    all_dialogs.pop(0)  # Removes the first value to allow iteration to start at the second
+    test_inp = all_dialogs[::2]  # Extract individual testing sentences from pairs
+
+    # File Saving
+    file_path = Path(current_dir, out_dir)
+    logger.info(f"Saving Schema dialogue data to {file_path}")
+
+    with open(file_path, mode='wt', encoding='utf-8') as myfile:
+        myfile.write('\n'.join(test_inp))
+
+    logger.info("Processing Complete!")
+
+
+def slotted_testing_input_utterance(inp_dir, out_dir):
+    all_dialogs = []  # List array for final extracted dialogs
+
+    for file_name in tqdm.tqdm(os.listdir(inp_dir),
+                               desc='Extracting testing utterances'):  # Display progress bar during loop
+
+        if 'schema.json' in file_name:
+            continue
+
+        file_path = os.path.join(inp_dir, file_name)
+
+        with open(file_path, "r") as f:
+            data = json.load(f)
+
+        temp_dialogs = []
+        for dialogue in data:
+            # Check selected domain substring against string values
+            substring_in_domain = any(domain_option in string for string in dialogue['services'])
+            if substring_in_domain == True:
+                for item in dialogue['turns']:
+                    utterance = item['utterance']  # Extract the system and user speech
+                    for item2 in item['frames']:
+                        for item3 in item2['actions']:
+                            canonical_value = item3['values']  # Extract canonical values
+                            slot_value = '$' + item3['slot']  # Extract replacement slot values
+
+                            # Replace each canonical value with its respected slot value
+                            for i in canonical_value:
+                                utterance = utterance.replace(i, slot_value)
+
+                    temp_dialogs.append(utterance)
+        all_dialogs.extend(temp_dialogs)
+
+    test_inp = all_dialogs[::2]  # Extract individual testing sentences from pairs
+
+    # File Saving
+    file_path = Path(current_dir, out_dir)
+    logger.info(f"Saving Schema dialogue data to {file_path}")
+
+    with open(file_path, mode='wt', encoding='utf-8') as myfile:
+        myfile.write('\n'.join(test_inp))
+
+    logger.info("Processing Complete!")
+
+
 # Initialise logger
 init_logging()
 logger = logging.getLogger(__name__)
@@ -231,6 +395,9 @@ val_dir = "raw_data/dstc8-schema-guided-dialogue/dev"
 output_train_dir = "processed_data/train/all_training_dialogue.csv"
 output_test_dir = "processed_data/test/all_testing_dialogue.csv"
 output_val_dir = "processed_data/val/all_val_dialogue.csv"
+
+output_test_dir2 = "processed_data/BLEU/human_translated_dialogue.txt"
+output_test_dir3 = "processed_data/test/input_testing_dialogue.txt"
 
 if __name__ == "__main__":
     # Create processed_data folders for all final dialogues
@@ -281,6 +448,11 @@ if __name__ == "__main__":
         extract_utterance(test_dir, output_test_dir)
         extract_utterance(val_dir, output_val_dir)
 
+        # Data for BLEU score
+        testing_translated_utterance(test_dir, output_test_dir2)  # Human translated response for BLEU score
+
+        testing_input_utterance(test_dir, output_test_dir3)  # Pure testing data to be evaluated
+
         remove_file("temp.txt")
         remove_file("temp.csv")
     else:
@@ -288,6 +460,11 @@ if __name__ == "__main__":
         slotted_utterance(train_dir, output_train_dir)
         slotted_utterance(test_dir, output_test_dir)
         slotted_utterance(val_dir, output_val_dir)
+
+        # Data for BLEU score
+        slotted_testing_translated_utterance(test_dir, output_test_dir2)
+
+        slotted_testing_input_utterance(test_dir, output_test_dir3)
 
         remove_file("temp.txt")
         remove_file("temp.csv")
