@@ -9,12 +9,22 @@ import time
 
 import numpy as np
 import matplotlib.pyplot as plt
+from pick import pick
 
 import tensorflow_text as text
 import tensorflow as tf
 from tensorflow_text.tools.wordpiece_vocab import bert_vocab_from_dataset as bert_vocab
 
-path_to_file = 'processed_data/train/all_training_dialogue.csv'  # Input file
+model_question = 'Which dataset is being used to create the subword tokenizer? (Must be same as dataset being used to ' \
+                 'train)'
+model_answers = ['Train on pre-processed data', 'Train on provided candidate data',]
+model_option, index = pick(model_answers, model_question)
+
+if index == 0:
+    path_to_file = 'processed_data/train/all_training_dialogue.csv'  # Input file
+
+else:
+    path_to_file = 'processed_data/candidate/dstc8-train.csv'  # Input file
 
 train_examples = tf.data.experimental.CsvDataset(path_to_file, ["", ""])  # Create CSV data.dataset
 
@@ -131,6 +141,7 @@ def cleanup_text(reserved_tokens, token_txt):
     result = tf.strings.reduce_join(result, separator=' ', axis=-1)
 
     return result
+
 
 # Checking output
 print(en_examples.numpy())
