@@ -1,6 +1,7 @@
 import collections
 import logging
 import os
+import io
 import pathlib
 import re
 import string
@@ -9,6 +10,10 @@ import time
 from downloading_data import init_logging
 import tqdm as tqdm
 import timeit
+from pick import pick
+import os.path
+from os import path
+from jiwer import wer
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -25,6 +30,8 @@ logger = logging.getLogger(__name__)
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 sys.path.insert(0, parent_dir)
+
+# ******************************************* MODEL PRE-PROCESSING *******************************************
 
 path_to_file = 'processed_data/train/all_training_dialogue.csv'
 
@@ -72,10 +79,6 @@ def tokenize_pairs(pt, en):
     return pt, en
 
 
-BUFFER_SIZE = 20000
-BATCH_SIZE = 64
-
-
 def make_batches(ds):
     return (
         ds
@@ -84,9 +87,6 @@ def make_batches(ds):
             .batch(BATCH_SIZE)
             .map(tokenize_pairs, num_parallel_calls=tf.data.AUTOTUNE)
             .prefetch(tf.data.AUTOTUNE))
-
-
-train_batches = make_batches(train_examples)
 
 
 # val_batches = make_batches(val_examples)
@@ -112,24 +112,6 @@ def positional_encoding(position, d_model):
     return tf.cast(pos_encoding, dtype=tf.float32)
 
 
-n, d = 2048, 512
-pos_encoding = positional_encoding(n, d)
-print(pos_encoding.shape)
-pos_encoding = pos_encoding[0]
-
-# Juggle the dimensions for the plot
-pos_encoding = tf.reshape(pos_encoding, (n, d // 2, 2))
-pos_encoding = tf.transpose(pos_encoding, (2, 1, 0))
-pos_encoding = tf.reshape(pos_encoding, (d, n))
-
-
-# plt.pcolormesh(pos_encoding, cmap='RdBu')
-# plt.ylabel('Depth')
-# plt.xlabel('Position')
-# plt.colorbar()
-# plt.show()
-
-
 def create_padding_mask(seq):
     seq = tf.cast(tf.math.equal(seq, 0), tf.float32)
 
@@ -138,18 +120,9 @@ def create_padding_mask(seq):
     return seq[:, tf.newaxis, tf.newaxis, :]  # (batch_size, 1, 1, seq_len)
 
 
-x = tf.constant([[7, 6, 0, 0, 1], [1, 2, 3, 0, 0], [0, 0, 0, 4, 5]])
-create_padding_mask(x)
-
-
 def create_look_ahead_mask(size):
     mask = 1 - tf.linalg.band_part(tf.ones((size, size)), -1, 0)
     return mask  # (seq_len, seq_len)
-
-
-x = tf.random.uniform((1, 3))
-temp = create_look_ahead_mask(x.shape[1])
-print(temp)
 
 
 def scaled_dot_product_attention(q, k, v, mask):
@@ -179,39 +152,6 @@ def print_out(q, k, v):
     print(temp_attn)
     print('Output is:')
     print(temp_out)
-
-
-np.set_printoptions(suppress=True)
-
-temp_k = tf.constant([[10, 0, 0],
-                      [0, 10, 0],
-                      [0, 0, 10],
-                      [0, 0, 10]], dtype=tf.float32)  # (4, 3)
-
-temp_v = tf.constant([[1, 0],
-                      [10, 0],
-                      [100, 5],
-                      [1000, 6]], dtype=tf.float32)  # (4, 2)
-
-# This `query` aligns with the second `key`,
-# so the second `value` is returned.
-temp_q = tf.constant([[0, 10, 0]], dtype=tf.float32)  # (1, 3)
-print_out(temp_q, temp_k, temp_v)
-
-# This query aligns with a repeated key (third and fourth),
-# so all associated values get averaged.
-temp_q = tf.constant([[0, 0, 10]], dtype=tf.float32)  # (1, 3)
-print_out(temp_q, temp_k, temp_v)
-
-# This query aligns equally with the first and second key,
-# so their values get averaged.
-temp_q = tf.constant([[10, 10, 0]], dtype=tf.float32)  # (1, 3)
-print_out(temp_q, temp_k, temp_v)
-
-temp_q = tf.constant([[0, 0, 10],
-                      [0, 10, 0],
-                      [10, 10, 0]], dtype=tf.float32)  # (3, 3)
-print_out(temp_q, temp_k, temp_v)
 
 
 class MultiHeadAttention(tf.keras.layers.Layer):
@@ -261,21 +201,11 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         return output, attention_weights
 
 
-temp_mha = MultiHeadAttention(d_model=512, num_heads=8)
-y = tf.random.uniform((1, 60, 512))  # (batch_size, encoder_sequence, d_model)
-out, attn = temp_mha(y, k=y, q=y, mask=None)
-print(out.shape, attn.shape)
-
-
 def point_wise_feed_forward_network(d_model, dff):
     return tf.keras.Sequential([
         tf.keras.layers.Dense(dff, activation='relu'),  # (batch_size, seq_len, dff)
         tf.keras.layers.Dense(d_model)  # (batch_size, seq_len, d_model)
     ])
-
-
-sample_ffn = point_wise_feed_forward_network(512, 2048)
-print(sample_ffn(tf.random.uniform((64, 50, 512))).shape)
 
 
 class EncoderLayer(tf.keras.layers.Layer):
@@ -301,14 +231,6 @@ class EncoderLayer(tf.keras.layers.Layer):
         out2 = self.layernorm2(out1 + ffn_output)  # (batch_size, input_seq_len, d_model)
 
         return out2
-
-
-sample_encoder_layer = EncoderLayer(512, 8, 2048)
-
-sample_encoder_layer_output = sample_encoder_layer(
-    tf.random.uniform((64, 43, 512)), False, None)
-
-print(sample_encoder_layer_output.shape)  # (batch_size, input_seq_len, d_model)
 
 
 class DecoderLayer(tf.keras.layers.Layer):
@@ -348,15 +270,6 @@ class DecoderLayer(tf.keras.layers.Layer):
         return out3, attn_weights_block1, attn_weights_block2
 
 
-sample_decoder_layer = DecoderLayer(512, 8, 2048)
-
-sample_decoder_layer_output, _, _ = sample_decoder_layer(
-    tf.random.uniform((64, 50, 512)), sample_encoder_layer_output,
-    False, None, None)
-
-print(sample_decoder_layer_output.shape)  # (batch_size, target_seq_len, d_model)
-
-
 class Encoder(tf.keras.layers.Layer):
     def __init__(self, num_layers, d_model, num_heads, dff, input_vocab_size,
                  maximum_position_encoding, rate=0.1):
@@ -388,16 +301,6 @@ class Encoder(tf.keras.layers.Layer):
             x = self.enc_layers[i](x, training, mask)
 
         return x  # (batch_size, input_seq_len, d_model)
-
-
-sample_encoder = Encoder(num_layers=2, d_model=512, num_heads=8,
-                         dff=2048, input_vocab_size=8500,
-                         maximum_position_encoding=10000)
-temp_input = tf.random.uniform((64, 62), dtype=tf.int64, minval=0, maxval=200)
-
-sample_encoder_output = sample_encoder(temp_input, training=False, mask=None)
-
-print(sample_encoder_output.shape)  # (batch_size, input_seq_len, d_model)
 
 
 class Decoder(tf.keras.layers.Layer):
@@ -437,20 +340,6 @@ class Decoder(tf.keras.layers.Layer):
         return x, attention_weights
 
 
-sample_decoder = Decoder(num_layers=2, d_model=512, num_heads=8,
-                         dff=2048, target_vocab_size=8000,
-                         maximum_position_encoding=5000)
-temp_input = tf.random.uniform((64, 26), dtype=tf.int64, minval=0, maxval=200)
-
-output, attn = sample_decoder(temp_input,
-                              enc_output=sample_encoder_output,
-                              training=False,
-                              look_ahead_mask=None,
-                              padding_mask=None)
-
-print(output.shape, attn['decoder_layer2_block2'].shape)
-
-
 class Transformer(tf.keras.Model):
     def __init__(self, num_layers, d_model, num_heads, dff, input_vocab_size,
                  target_vocab_size, pe_input, pe_target, rate=0.1):
@@ -477,28 +366,6 @@ class Transformer(tf.keras.Model):
         return final_output, attention_weights
 
 
-sample_transformer = Transformer(
-    num_layers=2, d_model=512, num_heads=8, dff=2048,
-    input_vocab_size=8500, target_vocab_size=8000,
-    pe_input=10000, pe_target=6000)
-
-temp_input = tf.random.uniform((64, 38), dtype=tf.int64, minval=0, maxval=200)
-temp_target = tf.random.uniform((64, 36), dtype=tf.int64, minval=0, maxval=200)
-
-fn_out, _ = sample_transformer(temp_input, temp_target, training=False,
-                               enc_padding_mask=None,
-                               look_ahead_mask=None,
-                               dec_padding_mask=None)
-
-print(fn_out.shape)  # (batch_size, tar_seq_len, target_vocab_size)
-
-num_layers = 4
-d_model = 128
-dff = 512
-num_heads = 8
-dropout_rate = 0.1
-
-
 class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
     def __init__(self, d_model, warmup_steps=4000):
         super(CustomSchedule, self).__init__()
@@ -513,21 +380,6 @@ class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
         arg2 = step * (self.warmup_steps ** -1.5)
 
         return tf.math.rsqrt(self.d_model) * tf.math.minimum(arg1, arg2)
-
-
-learning_rate = CustomSchedule(d_model)
-
-optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98,
-                                     epsilon=1e-9)
-
-temp_learning_rate_schedule = CustomSchedule(d_model)
-
-plt.plot(temp_learning_rate_schedule(tf.range(40000, dtype=tf.float32)))
-plt.ylabel("Learning Rate")
-plt.xlabel("Train Step")
-
-loss_object = tf.keras.losses.SparseCategoricalCrossentropy(
-    from_logits=True, reduction='none')
 
 
 def loss_function(real, pred):
@@ -551,21 +403,6 @@ def accuracy_function(real, pred):
     return tf.reduce_sum(accuracies) / tf.reduce_sum(mask)
 
 
-train_loss = tf.keras.metrics.Mean(name='train_loss')
-train_accuracy = tf.keras.metrics.Mean(name='train_accuracy')
-
-transformer = Transformer(
-    num_layers=num_layers,
-    d_model=d_model,
-    num_heads=num_heads,
-    dff=dff,
-    input_vocab_size=tokenizers.pt.get_vocab_size(),
-    target_vocab_size=tokenizers.en.get_vocab_size(),
-    pe_input=1000,
-    pe_target=1000,
-    rate=dropout_rate)
-
-
 def create_masks(inp, tar):
     # Encoder padding mask
     enc_padding_mask = create_padding_mask(inp)
@@ -579,26 +416,10 @@ def create_masks(inp, tar):
     return enc_padding_mask, combined_mask, dec_padding_mask
 
 
-checkpoint_path = "./checkpoints/train"
-
-ckpt = tf.train.Checkpoint(transformer=transformer,
-                           optimizer=optimizer)
-
-ckpt_manager = tf.train.CheckpointManager(ckpt, checkpoint_path, max_to_keep=5)
-
-# Restore the latest checkpoint.
-if ckpt_manager.latest_checkpoint:
-    ckpt.restore(ckpt_manager.latest_checkpoint)
-    print('Latest checkpoint restored!!')
-
-EPOCHS = 5
-
 train_step_signature = [
     tf.TensorSpec(shape=(None, None), dtype=tf.int64),
     tf.TensorSpec(shape=(None, None), dtype=tf.int64),
 ]
-
-training_start_time = timeit.default_timer()  # Start training timer
 
 
 @tf.function(input_signature=train_step_signature)
@@ -623,31 +444,37 @@ def train_step(inp, tar):
     train_accuracy(accuracy_function(tar_real, predictions))
 
 
-for epoch in range(EPOCHS):
-    start = time.time()
+def train_model(EPOCHS):
+    training_start_time = timeit.default_timer()  # Start training timer
 
-    train_loss.reset_states()
-    train_accuracy.reset_states()
+    for epoch in range(EPOCHS):
+        start = time.time()
 
-    # inp -> input, tar -> response
-    for (batch, (inp, tar)) in enumerate(train_batches):
-        train_step(inp, tar)
+        train_loss.reset_states()
+        train_accuracy.reset_states()
 
-        if batch % 50 == 0:
-            print(
-                f'Epoch {epoch + 1} Batch {batch} Loss {train_loss.result():.4f} Accuracy {train_accuracy.result():.4f}')
+        # inp -> input, tar -> response
+        for (batch, (inp, tar)) in enumerate(train_batches):
+            train_step(inp, tar)
 
-    if (epoch + 1) % 5 == 0:
-        ckpt_save_path = ckpt_manager.save()
-        print(f'Saving checkpoint for epoch {epoch + 1} at {ckpt_save_path}')
+            if batch % 50 == 0:
+                print(
+                    f'Epoch {epoch + 1} Batch {batch} Loss {train_loss.result():.4f} Accuracy {train_accuracy.result():.4f}')
 
-    print(f'Epoch {epoch + 1} Loss {train_loss.result():.4f} Accuracy {train_accuracy.result():.4f}')
+        if (epoch + 1) % 5 == 0:
+            ckpt_save_path = ckpt_manager.save()
+            print(f'Saving checkpoint for epoch {epoch + 1} at {ckpt_save_path}')
 
-    print(f'Time taken for 1 epoch: {time.time() - start:.2f} secs\n')
+        print(f'Epoch {epoch + 1} Loss {train_loss.result():.4f} Accuracy {train_accuracy.result():.4f}')
 
-# Stop training timer
-training_elapsed = timeit.default_timer() - training_start_time
-print("Time taken training:", round(training_elapsed), "sec")
+        print(f'Time taken for 1 epoch: {time.time() - start:.2f} secs\n')
+
+    with open('status.txt', 'w') as filetowrite:
+        filetowrite.write(str(status))
+
+    # Stop training timer
+    training_elapsed = timeit.default_timer() - training_start_time
+    print("Time taken training:", round(training_elapsed), "sec")
 
 
 # ******************************************* MODEL TESTING *******************************************
@@ -710,12 +537,18 @@ def response(sentence):
     return translated_text
 
 
-# Test sentence
-# sentence = "I want to check the weather for $date."
-# ground_truth = "What city are you checking the weather for?"
+# Calculates the word error rate using jiwer
+def WER(gt_path, hypothesis_path):
+    GTsentences = io.open(gt_path, encoding='UTF-8').read().strip().split('\n')
 
-# translated_text, translated_tokens, attention_weights = evaluate(sentence)
-# print_translation(sentence, translated_text, ground_truth)
+    Hsentences = io.open(hypothesis_path, encoding='UTF-8').read().strip().split('\n')
+
+    error = wer(GTsentences, Hsentences)
+    logger.info("Calculating the word error rate...")
+    print("The word error rate is: ", round((error) * 100, 2), "%", sep='')
+
+    return error
+
 
 # Main evaluation function
 def evaluate_model(filename):
@@ -731,8 +564,8 @@ def evaluate_model(filename):
     new_string = ''
     for x in tqdm.tqdm(content, desc='Generating responses based on testing data:'):
         result = response(x)
-        new_string = ('{}'.format(result))
-        new_string = new_string.replace('<end>', '')
+        new_string = ('{}'.format(result.numpy().decode('utf-8')))
+        # new_string = new_string.replace('<end>', '')
         empty_list.append(new_string)
 
     # File Saving
@@ -744,16 +577,259 @@ def evaluate_model(filename):
 
     logger.info("Saving Complete!")
 
-    # gt_path = current_dir + "/processed_data/BLEU/human_translated_dialogue.txt"
-    # hypothesis_path = current_dir + "/processed_data/BLEU/machine_translated_dialogue.txt"
+    gt_path = current_dir + "/processed_data/BLEU/human_translated_dialogue.txt"
+    hypothesis_path = current_dir + "/processed_data/BLEU/machine_translated_dialogue.txt"
 
     # Calculating the word error rate
-    # WER(gt_path, hypothesis_path)
+    WER(gt_path, hypothesis_path)
 
     # Stop testing timer
     testing_elapsed = timeit.default_timer() - testing_start_time
     print("Time taken testing:", round(testing_elapsed), "sec")
 
 
-path_to_data_test = "input_testing_dialogue.txt"
-evaluate_model(path_to_data_test)
+def action():
+    all_data = ""
+    path_to_file = ""
+    status = ""
+    epoch_option = ""
+
+    # Gather status of model
+    model_status = '\nCurrent status: '
+    with open('status.txt', 'r') as file:
+        model_status += file.read()
+
+    # Allow the user to choose the domain being trained + report status
+    model_question = 'What action would you like to perform? (Evaluation must be performed according to previously ' \
+                     'trained model)\n' + model_status
+    model_answers = ['Train on pre-processed data', 'Train on provided candidate data',
+                     'Measure the performance of pre-processed data model using validation dataset',
+                     'Measure the performance of candidate data model using validation dataset',
+                     'Evaluate pre-processed data model', 'Evaluate candidate data model']
+    model_option, index = pick(model_answers, model_question)
+
+    # Loop for training on pre-processed data
+    if index == 0:
+        epoch_question = 'How many epochs to train? '
+        epoch_answer = [5, 10, 25, 50, 100]
+        epoch_option, index_epoch = pick(epoch_answer, epoch_question)
+
+        status = "The currently saved model is based on the 'pre-processed dataset' over " + str(
+            epoch_option) + " epochs."
+
+        if path.exists(checkpoint_path):
+            logger.info("Removing previous checkpoints...\n")
+            for filename in os.listdir(checkpoint_path):
+                os.remove(checkpoint_path + "/" + filename)
+
+    # Loop for training on candidate data
+    if index == 1:
+        epoch_question = 'How many epochs to train? '
+        epoch_answer = [5, 10, 25, 50, 100]
+        epoch_option, index_epoch = pick(epoch_answer, epoch_question)
+
+        status = "The currently saved model is based on the 'candidate dataset' over " + str(epoch_option) + " epochs."
+
+        if path.exists(checkpoint_path):
+            logger.info("Removing previous checkpoints...\n")
+            for filename in os.listdir(checkpoint_path):
+                os.remove(checkpoint_path + "/" + filename)
+
+    return all_data, path_to_file, status, epoch_option, index
+
+
+# ******************************************* MODEL PARAMETERS *******************************************
+
+checkpoint_path = "./checkpoints/train"
+
+all_data, path_to_file, status, epoch_option, index = action()
+
+BUFFER_SIZE = 20000
+BATCH_SIZE = 64
+
+train_batches = make_batches(train_examples)
+
+n, d = 2048, 512
+pos_encoding = positional_encoding(n, d)
+print(pos_encoding.shape)
+pos_encoding = pos_encoding[0]
+
+# Juggle the dimensions for the plot
+pos_encoding = tf.reshape(pos_encoding, (n, d // 2, 2))
+pos_encoding = tf.transpose(pos_encoding, (2, 1, 0))
+pos_encoding = tf.reshape(pos_encoding, (d, n))
+
+x = tf.constant([[7, 6, 0, 0, 1], [1, 2, 3, 0, 0], [0, 0, 0, 4, 5]])
+create_padding_mask(x)
+
+x = tf.random.uniform((1, 3))
+temp = create_look_ahead_mask(x.shape[1])
+print(temp)
+
+np.set_printoptions(suppress=True)
+
+temp_k = tf.constant([[10, 0, 0],
+                      [0, 10, 0],
+                      [0, 0, 10],
+                      [0, 0, 10]], dtype=tf.float32)  # (4, 3)
+
+temp_v = tf.constant([[1, 0],
+                      [10, 0],
+                      [100, 5],
+                      [1000, 6]], dtype=tf.float32)  # (4, 2)
+
+# This `query` aligns with the second `key`,
+# so the second `value` is returned.
+temp_q = tf.constant([[0, 10, 0]], dtype=tf.float32)  # (1, 3)
+print_out(temp_q, temp_k, temp_v)
+
+# This query aligns with a repeated key (third and fourth),
+# so all associated values get averaged.
+temp_q = tf.constant([[0, 0, 10]], dtype=tf.float32)  # (1, 3)
+print_out(temp_q, temp_k, temp_v)
+
+# This query aligns equally with the first and second key,
+# so their values get averaged.
+temp_q = tf.constant([[10, 10, 0]], dtype=tf.float32)  # (1, 3)
+print_out(temp_q, temp_k, temp_v)
+
+temp_q = tf.constant([[0, 0, 10],
+                      [0, 10, 0],
+                      [10, 10, 0]], dtype=tf.float32)  # (3, 3)
+print_out(temp_q, temp_k, temp_v)
+
+temp_mha = MultiHeadAttention(d_model=512, num_heads=8)
+y = tf.random.uniform((1, 60, 512))  # (batch_size, encoder_sequence, d_model)
+out, attn = temp_mha(y, k=y, q=y, mask=None)
+print(out.shape, attn.shape)
+
+sample_ffn = point_wise_feed_forward_network(512, 2048)
+print(sample_ffn(tf.random.uniform((64, 50, 512))).shape)
+
+sample_encoder_layer = EncoderLayer(512, 8, 2048)
+
+sample_encoder_layer_output = sample_encoder_layer(
+    tf.random.uniform((64, 43, 512)), False, None)
+
+print(sample_encoder_layer_output.shape)  # (batch_size, input_seq_len, d_model)
+
+sample_decoder_layer = DecoderLayer(512, 8, 2048)
+
+sample_decoder_layer_output, _, _ = sample_decoder_layer(
+    tf.random.uniform((64, 50, 512)), sample_encoder_layer_output,
+    False, None, None)
+
+print(sample_decoder_layer_output.shape)  # (batch_size, target_seq_len, d_model)
+
+sample_encoder = Encoder(num_layers=2, d_model=512, num_heads=8,
+                         dff=2048, input_vocab_size=8500,
+                         maximum_position_encoding=10000)
+temp_input = tf.random.uniform((64, 62), dtype=tf.int64, minval=0, maxval=200)
+
+sample_encoder_output = sample_encoder(temp_input, training=False, mask=None)
+
+print(sample_encoder_output.shape)  # (batch_size, input_seq_len, d_model)
+
+sample_decoder = Decoder(num_layers=2, d_model=512, num_heads=8,
+                         dff=2048, target_vocab_size=8000,
+                         maximum_position_encoding=5000)
+temp_input = tf.random.uniform((64, 26), dtype=tf.int64, minval=0, maxval=200)
+
+output, attn = sample_decoder(temp_input,
+                              enc_output=sample_encoder_output,
+                              training=False,
+                              look_ahead_mask=None,
+                              padding_mask=None)
+
+print(output.shape, attn['decoder_layer2_block2'].shape)
+
+sample_transformer = Transformer(
+    num_layers=2, d_model=512, num_heads=8, dff=2048,
+    input_vocab_size=8500, target_vocab_size=8000,
+    pe_input=10000, pe_target=6000)
+
+temp_input = tf.random.uniform((64, 38), dtype=tf.int64, minval=0, maxval=200)
+temp_target = tf.random.uniform((64, 36), dtype=tf.int64, minval=0, maxval=200)
+
+fn_out, _ = sample_transformer(temp_input, temp_target, training=False,
+                               enc_padding_mask=None,
+                               look_ahead_mask=None,
+                               dec_padding_mask=None)
+
+print(fn_out.shape)  # (batch_size, tar_seq_len, target_vocab_size)
+
+num_layers = 4
+d_model = 128
+dff = 512
+num_heads = 8
+dropout_rate = 0.1
+
+learning_rate = CustomSchedule(d_model)
+
+optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98,
+                                     epsilon=1e-9)
+
+temp_learning_rate_schedule = CustomSchedule(d_model)
+
+plt.plot(temp_learning_rate_schedule(tf.range(40000, dtype=tf.float32)))
+plt.ylabel("Learning Rate")
+plt.xlabel("Train Step")
+
+loss_object = tf.keras.losses.SparseCategoricalCrossentropy(
+    from_logits=True, reduction='none')
+
+train_loss = tf.keras.metrics.Mean(name='train_loss')
+train_accuracy = tf.keras.metrics.Mean(name='train_accuracy')
+
+transformer = Transformer(
+    num_layers=num_layers,
+    d_model=d_model,
+    num_heads=num_heads,
+    dff=dff,
+    input_vocab_size=tokenizers.pt.get_vocab_size(),
+    target_vocab_size=tokenizers.en.get_vocab_size(),
+    pe_input=1000,
+    pe_target=1000,
+    rate=dropout_rate)
+
+ckpt = tf.train.Checkpoint(transformer=transformer,
+                           optimizer=optimizer)
+
+ckpt_manager = tf.train.CheckpointManager(ckpt, checkpoint_path, max_to_keep=5)
+
+# ******************************************* MAIN *******************************************
+
+if (index == 0) or (index == 1):
+    train_model(epoch_option)
+
+# if index == 2:
+#     path_to_data_val = "processed_data/val/input_val_dialogue.txt"
+#     # Restore the latest checkpoint.
+#     if ckpt_manager.latest_checkpoint:
+#         ckpt.restore(ckpt_manager.latest_checkpoint)
+#         print('Latest checkpoint restored!!')
+#     evaluate_model(path_to_data_val)
+#
+# if index == 3:
+#     path_to_data_val = current_dir + "/processed_data/candidate/dstc8-val-candidates.txt"
+#     # Restore the latest checkpoint.
+#     if ckpt_manager.latest_checkpoint:
+#         ckpt.restore(ckpt_manager.latest_checkpoint)
+#         print('Latest checkpoint restored!!')
+#     candidate_evaluate_model(path_to_data_val)
+
+if index == 4:
+    path_to_data_test = "processed_data/test/input_testing_dialogue.txt"
+    # Restore the latest checkpoint.
+    if ckpt_manager.latest_checkpoint:
+        ckpt.restore(ckpt_manager.latest_checkpoint)
+        print('Latest checkpoint restored!!')
+    evaluate_model(path_to_data_test)
+
+# if index == 5:
+#     path_to_data_test = current_dir + "/processed_data/candidate/dstc8-test-candidates.txt"
+#     # Restore the latest checkpoint.
+#     if ckpt_manager.latest_checkpoint:
+#         ckpt.restore(ckpt_manager.latest_checkpoint)
+#         print('Latest checkpoint restored!!')
+#     candidate_evaluate_model(path_to_data_test)
