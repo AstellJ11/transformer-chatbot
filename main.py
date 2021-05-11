@@ -14,6 +14,8 @@ from pick import pick
 import os.path
 from os import path
 from jiwer import wer
+import concurrent.futures
+import requests
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -480,7 +482,7 @@ def train_model(EPOCHS):
 # ******************************************* MODEL TESTING *******************************************
 
 # Main evaluate method
-def evaluate(sentence, max_length=40):
+def evaluate(sentence, max_length=40, timeout=10):
     # Add start + end token
     sentence = tf.convert_to_tensor([sentence])
     sentence = tokenizers.pt.tokenize(sentence).to_tensor()
@@ -522,14 +524,16 @@ def evaluate(sentence, max_length=40):
     return text, tokens, attention_weights
 
 
-# def print_translation(sentence, tokens, ground_truth):
-#     print(f'{"Input:":15s}: {sentence}')
-#     print(f'{"Prediction":15s}: {tokens.numpy().decode("utf-8")}')
-#     print(f'{"Ground truth":15s}: {ground_truth}')
-
 # Generate response using evaluate function
 def response(sentence):
-    translated_text, translated_tokens, attention_weights = evaluate(sentence)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        futures = []
+        futures.append(executor.submit(evaluate, sentence=sentence, timeout=0.00001))
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                translated_text, translated_tokens, attention_weights = future.result()
+            except requests.ConnectTimeout:
+                print("ConnectTimeout.")
 
     # print('Input: %s' % (sentence))
     # print('Predicted response: {}'.format(translated_text))
@@ -587,6 +591,11 @@ def evaluate_model(filename):
     testing_elapsed = timeit.default_timer() - testing_start_time
     print("Time taken testing:", round(testing_elapsed), "sec")
 
+
+# ******************************************* CANDIDATE MODEL TESTING *******************************************
+
+
+# ******************************************* USER INPUT *******************************************
 
 def action():
     all_data = ""
@@ -826,10 +835,10 @@ if index == 4:
         print('Latest checkpoint restored!!')
     evaluate_model(path_to_data_test)
 
-# if index == 5:
-#     path_to_data_test = current_dir + "/processed_data/candidate/dstc8-test-candidates.txt"
-#     # Restore the latest checkpoint.
-#     if ckpt_manager.latest_checkpoint:
-#         ckpt.restore(ckpt_manager.latest_checkpoint)
-#         print('Latest checkpoint restored!!')
-#     candidate_evaluate_model(path_to_data_test)
+if index == 5:
+    path_to_data_test = current_dir + "/processed_data/candidate/dstc8-test-candidates.txt"
+    # Restore the latest checkpoint.
+    if ckpt_manager.latest_checkpoint:
+        ckpt.restore(ckpt_manager.latest_checkpoint)
+        print('Latest checkpoint restored!!')
+    # candidate_evaluate_model(path_to_data_test)
