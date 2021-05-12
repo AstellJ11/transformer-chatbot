@@ -33,42 +33,8 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 sys.path.insert(0, parent_dir)
 
-# ******************************************* MODEL PRE-PROCESSING *******************************************
 
-path_to_file = 'processed_data/train/all_training_dialogue.csv'
-
-train_examples = tf.data.experimental.CsvDataset(path_to_file, ["", ""])
-
-for pt_examples, en_examples in train_examples.batch(3).take(1):
-    for pt in pt_examples.numpy():
-        print(pt.decode('utf-8'))
-
-    print()
-
-    for en in en_examples.numpy():
-        print(en.decode('utf-8'))
-
-path_to_dir = 'tokenizer_model'
-
-tokenizers = tf.saved_model.load(path_to_dir)
-
-print([item for item in dir(tokenizers.en) if not item.startswith('_')])
-
-for en in en_examples.numpy():
-    print(en.decode('utf-8'))
-
-encoded = tokenizers.en.tokenize(en_examples)
-
-for row in encoded.to_list():
-    print(row)
-
-round_trip = tokenizers.en.detokenize(encoded)
-for line in round_trip.numpy():
-    print(line.decode('utf-8'))
-
-tokens = tokenizers.en.lookup(encoded)
-print(tokens)
-
+# ******************************************* MODEL FUNCTIONS *******************************************
 
 def tokenize_pairs(pt, en):
     pt = tokenizers.pt.tokenize(pt)
@@ -594,6 +560,187 @@ def evaluate_model(filename):
 
 # ******************************************* CANDIDATE MODEL TESTING *******************************************
 
+# Main evaluate method
+def candidate_evaluate(sentence, max_length=40, candidate=None, id=None):
+    # Add start + end token
+    sentence = tf.convert_to_tensor([sentence])
+    sentence = tokenizers.pt.tokenize(sentence).to_tensor()
+
+    candidate = tf.convert_to_tensor([candidate])
+    candidate = tokenizers.pt.tokenize(candidate)
+
+    encoder_input = sentence
+
+    value = 0
+    text = ''
+
+    # The first word to the transformer should be the start token
+    start, end = tokenizers.en.tokenize([''])[0]
+    output = tf.convert_to_tensor([start])
+    output = tf.expand_dims(output, 0)
+
+    candidate_words = []
+    if candidate != None:
+        test = candidate.to_list()
+        for item in test:
+            candidate_words += item
+
+    for i in range(max_length):
+        enc_padding_mask, combined_mask, dec_padding_mask = create_masks(
+            encoder_input, output)
+
+        # predictions.shape == (batch_size, seq_len, vocab_size)
+        predictions, attention_weights = transformer(encoder_input,
+                                                     output,
+                                                     False,
+                                                     enc_padding_mask,
+                                                     combined_mask,
+                                                     dec_padding_mask)
+
+        # Select the last word from the seq_len dimension
+        predictions = predictions[:, -1:, :]  # (batch_size, 1, vocab_size)
+
+        if candidate == None:
+            predicted_id_out = tf.argmax(predictions, axis=-1)  # Need raw word input for rest of code to work
+        else:
+            predicted_id = candidate_words[i]  # For candidate
+
+        predicted_id_out = tf.argmax(predictions, axis=-1)  # Need raw word input for rest of code to work
+
+        pred_shape = predictions[0]  # Changing the shape of the prediction array to allow for manipulation
+
+        value += pred_shape[0][predicted_id].numpy()
+
+        output = tf.concat([output, predicted_id_out], axis=-1)
+        text = tokenizers.en.detokenize(output)[0]  # shape: ()
+
+        # Return the result if the predicted_id is equal to the end token
+        if predicted_id == 3:
+            return text, value / i, id
+
+    text = tokenizers.en.detokenize(output)[0]  # shape: ()
+    #tokens = tokenizers.en.lookup(output)[0]
+
+    return text, value / i, id
+
+
+# Read and pre-process candidate specific data as different format
+def candidate_load_dataset(filename):
+    file = open(filename, mode='rt', encoding='utf-8')
+    text = file.read()
+    file.close()
+    lines = text.strip().split('\n')
+
+    allCandidates = []  # Will contain all 10 candidate responses
+    candidates = []  # temp
+    contexts = []  # The input sentence for response to be generated
+
+    for i in range(0, len(lines)):
+        if lines[i].startswith("CONTEXT:"):
+            candidate = lines[i][8:]
+            contexts.append(candidate)
+            continue
+
+        elif len(lines[i].strip()) == 0:
+            if i > 0: allCandidates.append(candidates)
+            candidates = []
+
+        else:
+            candidate = lines[i][12:]
+            candidates.append(candidate)
+
+    allCandidates.append(candidates)
+    return allCandidates, contexts
+
+
+# Calculating rank value for performance metrics
+def rank_value(target_value, unsorted_distribution):
+    sorted_distribution = sorted(unsorted_distribution, reverse=True)  # Sort the distribution list
+    for i in range(0, len(sorted_distribution)):
+        value = sorted_distribution[i]  # Value equal to candidate distance value
+        if value == target_value:
+            return 1 / (i + 1)  # Calculate distance away from ground truth
+    return None
+
+
+# Main evaluation function
+def candidate_evaluate_model(filename_testdata):
+    testing_start_time = timeit.default_timer()  # Start testing timer
+
+    # Init variables/list
+    candidates, contexts = candidate_load_dataset(filename_testdata)
+    correct_predictions = 0
+    total_predictions = 0
+    cumulative_mrr = 0
+    recall_at_1 = None
+    mrr = None
+    ref_empty_list = []
+    resp_empty_list = []
+
+    # For all candidates using tqdm progress bar
+    for i in tqdm.tqdm(range(0, len(contexts)), desc='Evaluating model'):
+        total_predictions += 1
+        target_value = 0
+        context = contexts[i]
+        reference = candidates[i][0]
+        ref_empty_list.append(reference)
+        distribution = []
+        jobs = []
+
+        # Using 'concurrent.features. to enable parallel and reduce execution time
+        # with concurrent.futures.ThreadPoolExecutor() as executor:
+        #     jobs.append(executor.submit(candidate_evaluate, context, 40, None, 0))  # candidate_evaluate function
+        #     for j in range(0, len(candidates[i])):
+        #         jobs.append(executor.submit(candidate_evaluate, context, 40, candidates[i][j], (j + 1)))
+        #
+        # for future in concurrent.futures.as_completed(jobs):
+        #     candidate_sentence, value_candidate, id = future.result()  # Return function variables
+
+        for j in range(0, len(candidates[i])):
+            candidate_sentence, value_candidate, id = candidate_evaluate(context, 40, candidates[i][j], (j))
+            # First id is the response
+            if id == 0:
+                response = ('{}'.format(candidate_sentence.numpy().decode('utf-8')))
+                resp_empty_list.append(response)  # Add to response list for BLEU evaluation
+            # Add the value to the distribution before being passed into the rank_value function
+            else:
+                distribution.append(value_candidate)
+
+            if id == 1:
+                target_value = value_candidate  # Ground-truth response
+
+        rank = rank_value(target_value, distribution)
+        cumulative_mrr += rank  # Running total of rank to be divided later
+        correct_predictions += 1 if rank == 1 else 0  # Running total of correct predictions
+
+        recall_at_1 = correct_predictions / total_predictions  # Final recall@1 calc
+        mrr = cumulative_mrr / total_predictions  # Final mrr calc
+
+    # File Saving
+    ref_file_path = "processed_data/BLEU/human_translated_dialogue.txt"
+    resp_file_path = "processed_data/BLEU/machine_translated_dialogue.txt"
+
+    logger.info(f"Saving reference dialogue data to {ref_file_path}")
+    with open(ref_file_path, mode='wt', encoding='utf-8') as ref_myfile:
+        ref_myfile.write('\n'.join(ref_empty_list))
+
+    logger.info(f"Saving response dialogue data to {resp_file_path}")
+    with open(resp_file_path, mode='wt', encoding='utf-8') as resp_myfile:
+        resp_myfile.write('\n'.join(resp_empty_list))
+
+    logger.info("Saving Complete!")
+
+    # Calculating the word error rate + print in function
+    WER(ref_file_path, resp_file_path)
+
+    # Print results
+    print("The Recall@1 value is: " + str(recall_at_1))
+    print("The Mean Reciprocal Rank value is: " + str(mrr))
+
+    # Stop testing timer
+    testing_elapsed = timeit.default_timer() - testing_start_time
+    print("Time taken testing:", round(testing_elapsed), "sec")
+
 
 # ******************************************* USER INPUT *******************************************
 
@@ -631,6 +778,8 @@ def action():
             for filename in os.listdir(checkpoint_path):
                 os.remove(checkpoint_path + "/" + filename)
 
+        path_to_file = 'processed_data/train/all_training_dialogue.csv'
+
     # Loop for training on candidate data
     if index == 1:
         epoch_question = 'How many epochs to train? '
@@ -644,6 +793,14 @@ def action():
             for filename in os.listdir(checkpoint_path):
                 os.remove(checkpoint_path + "/" + filename)
 
+        path_to_file = 'processed_data/candidate/dstc8-train.csv'
+
+    if index == 4:
+        path_to_file = 'processed_data/train/all_training_dialogue.csv'
+
+    if index == 5:
+        path_to_file = 'processed_data/candidate/dstc8-train.csv'
+
     return all_data, path_to_file, status, epoch_option, index
 
 
@@ -652,6 +809,38 @@ def action():
 checkpoint_path = "./checkpoints/train"
 
 all_data, path_to_file, status, epoch_option, index = action()
+
+train_examples = tf.data.experimental.CsvDataset(path_to_file, ["", ""])
+
+for pt_examples, en_examples in train_examples.batch(3).take(1):
+    for pt in pt_examples.numpy():
+        print(pt.decode('utf-8'))
+
+    print()
+
+    for en in en_examples.numpy():
+        print(en.decode('utf-8'))
+
+path_to_dir = 'tokenizer_model'
+
+tokenizers = tf.saved_model.load(path_to_dir)
+
+print([item for item in dir(tokenizers.en) if not item.startswith('_')])
+
+for en in en_examples.numpy():
+    print(en.decode('utf-8'))
+
+encoded = tokenizers.en.tokenize(en_examples)
+
+for row in encoded.to_list():
+    print(row)
+
+round_trip = tokenizers.en.detokenize(encoded)
+for line in round_trip.numpy():
+    print(line.decode('utf-8'))
+
+tokens = tokenizers.en.lookup(encoded)
+print(tokens)
 
 BUFFER_SIZE = 20000
 BATCH_SIZE = 64
@@ -828,7 +1017,7 @@ if (index == 0) or (index == 1):
 #     candidate_evaluate_model(path_to_data_val)
 
 if index == 4:
-    path_to_data_test = "processed_data/test/input_testing_dialogue.txt"
+    path_to_data_test = 'processed_data/test/input_testing_dialogue.txt'
     # Restore the latest checkpoint.
     if ckpt_manager.latest_checkpoint:
         ckpt.restore(ckpt_manager.latest_checkpoint)
@@ -836,9 +1025,9 @@ if index == 4:
     evaluate_model(path_to_data_test)
 
 if index == 5:
-    path_to_data_test = current_dir + "/processed_data/candidate/dstc8-test-candidates.txt"
+    path_to_data_test = 'processed_data/candidate/dstc8-test-candidates.txt'
     # Restore the latest checkpoint.
     if ckpt_manager.latest_checkpoint:
         ckpt.restore(ckpt_manager.latest_checkpoint)
         print('Latest checkpoint restored!!')
-    # candidate_evaluate_model(path_to_data_test)
+    candidate_evaluate_model(path_to_data_test)
