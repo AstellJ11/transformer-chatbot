@@ -1,0 +1,12 @@
+pick==1.0.0
+tqdm==4.59.0
+tf_nightly==2.6.0.dev20210419
+jiwer==2.2.0
+pandas==1.2.4
+requests==2.25.1
+tensorflow_text_nightly==2.6.0.dev20210414
+matplotlib==3.3.4
+numpy==1.19.2
+tensorflow_datasets==4.2.0
+tensorflow==2.5.0
+tensorflow_text==2.4.3

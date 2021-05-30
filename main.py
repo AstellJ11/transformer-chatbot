@@ -1,3 +1,7 @@
+# Created by James Astell (17668733) as a partial fulfilment of the requirements for the
+# Degree of BSc(Hons) Computer Science
+# Section of code derived from: https://www.tensorflow.org/text/tutorials/transformer
+
 import collections
 import logging
 import os
@@ -515,7 +519,7 @@ def WER(gt_path, hypothesis_path):
 
     error = wer(GTsentences, Hsentences)
     logger.info("Calculating the word error rate...")
-    print("The word error rate is: ", round((error) * 100, 2), "%", sep='')
+    print("The word error rate is: ", round(error, 2))
 
     return error
 
@@ -619,7 +623,7 @@ def candidate_evaluate(sentence, max_length=40, candidate=None, id=None):
             return text, value / i, id
 
     text = tokenizers.en.detokenize(output)[0]  # shape: ()
-    #tokens = tokenizers.en.lookup(output)[0]
+    # tokens = tokenizers.en.lookup(output)[0]
 
     return text, value / i, id
 
@@ -689,7 +693,7 @@ def candidate_evaluate_model(filename_testdata):
 
         # Using 'concurrent.features. to enable parallel and reduce execution time
         # with concurrent.futures.ThreadPoolExecutor() as executor:
-        #     jobs.append(executor.submit(candidate_evaluate, context, 40, None, 0))  # candidate_evaluate function
+        #     jobs.append(executor.submit(candidate_evaluate, context, 40, None, 0))
         #     for j in range(0, len(candidates[i])):
         #         jobs.append(executor.submit(candidate_evaluate, context, 40, candidates[i][j], (j + 1)))
         #
@@ -730,12 +734,12 @@ def candidate_evaluate_model(filename_testdata):
 
     logger.info("Saving Complete!")
 
-    # Calculating the word error rate + print in function
-    WER(ref_file_path, resp_file_path)
-
     # Print results
     print("The Recall@1 value is: " + str(recall_at_1))
     print("The Mean Reciprocal Rank value is: " + str(mrr))
+
+    # Calculating the word error rate + print in function
+    WER(ref_file_path, resp_file_path)
 
     # Stop testing timer
     testing_elapsed = timeit.default_timer() - testing_start_time
