@@ -746,6 +746,27 @@ def candidate_evaluate_model(filename_testdata):
     print("Time taken testing:", round(testing_elapsed), "sec")
 
 
+# ******************************************* USER INTERACTION *******************************************
+
+
+# Allow the user to input dialogue
+def user_input():
+    clear = lambda: os.system('cls')
+    clear()
+    print("Hello! What can I assist you with?")
+    while True:
+        try:
+            sentence = (input("Type: "))
+        except ValueError:
+            print("Sorry, I didn't understand that.")
+            continue
+        else:
+            print("Thinking...", end="\r")
+            translated_text = response(sentence)
+            formatted_text = ('{}'.format(translated_text.numpy().decode('utf-8')))
+            print('Response:', formatted_text)
+
+
 # ******************************************* USER INPUT *******************************************
 
 def action():
@@ -765,7 +786,8 @@ def action():
     model_answers = ['Train on pre-processed data', 'Train on provided candidate data',
                      'Measure the performance of pre-processed data model using validation dataset',
                      'Measure the performance of candidate data model using validation dataset',
-                     'Evaluate pre-processed data model', 'Evaluate candidate data model']
+                     'Evaluate pre-processed data model', 'Evaluate candidate data model',
+                     'Chat with currently trained model']
     model_option, index = pick(model_answers, model_question)
 
     # Loop for training on pre-processed data
@@ -804,6 +826,9 @@ def action():
 
     if index == 5:
         path_to_file = 'processed_data/candidate/dstc8-train.csv'
+
+    if index == 6:
+        path_to_file = 'processed_data/train/all_training_dialogue.csv'  # Doesn't matter which file, just allows setup
 
     return all_data, path_to_file, status, epoch_option, index
 
@@ -1004,28 +1029,12 @@ ckpt_manager = tf.train.CheckpointManager(ckpt, checkpoint_path, max_to_keep=5)
 if (index == 0) or (index == 1):
     train_model(epoch_option)
 
-# if index == 2:
-#     path_to_data_val = "processed_data/val/input_val_dialogue.txt"
-#     # Restore the latest checkpoint.
-#     if ckpt_manager.latest_checkpoint:
-#         ckpt.restore(ckpt_manager.latest_checkpoint)
-#         print('Latest checkpoint restored!!')
-#     evaluate_model(path_to_data_val)
-#
-# if index == 3:
-#     path_to_data_val = current_dir + "/processed_data/candidate/dstc8-val-candidates.txt"
-#     # Restore the latest checkpoint.
-#     if ckpt_manager.latest_checkpoint:
-#         ckpt.restore(ckpt_manager.latest_checkpoint)
-#         print('Latest checkpoint restored!!')
-#     candidate_evaluate_model(path_to_data_val)
-
 if index == 4:
     path_to_data_test = 'processed_data/test/input_testing_dialogue.txt'
     # Restore the latest checkpoint.
     if ckpt_manager.latest_checkpoint:
         ckpt.restore(ckpt_manager.latest_checkpoint)
-        print('Latest checkpoint restored!!')
+        print('Latest checkpoint restored!')
     evaluate_model(path_to_data_test)
 
 if index == 5:
@@ -1033,5 +1042,12 @@ if index == 5:
     # Restore the latest checkpoint.
     if ckpt_manager.latest_checkpoint:
         ckpt.restore(ckpt_manager.latest_checkpoint)
-        print('Latest checkpoint restored!!')
+        print('Latest checkpoint restored!')
     candidate_evaluate_model(path_to_data_test)
+
+if index == 6:
+    # Restore the latest checkpoint.
+    if ckpt_manager.latest_checkpoint:
+        ckpt.restore(ckpt_manager.latest_checkpoint)
+        print('Latest checkpoint restored!')
+    user_input()
