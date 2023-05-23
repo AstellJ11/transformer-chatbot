@@ -6,7 +6,7 @@ pandas==1.2.4
 requests==2.31.0
 tensorflow_text_nightly==2.6.0.dev20210414
 matplotlib==3.3.4
-numpy==1.19.2
+numpy==1.22.0
 tensorflow_datasets==4.2.0
 tensorflow==2.11.1
 tensorflow_text==2.4.3
